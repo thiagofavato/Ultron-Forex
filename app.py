@@ -9,6 +9,7 @@ import html
 import threading
 import requests
 import time
+import os
 
 # ==========================================
 # CONFIGURAÇÕES DA PÁGINA
@@ -34,10 +35,29 @@ ESPECIFICACOES_CME = {
     "MBT=F": {"valor_ponto": 0.10, "casas": 2, "mult_pip": 1, "moeda_base": "BTC"} 
 }
 
+# ==========================================
+# CAIXA-PRETA: BANCO DE DADOS PERSISTENTE
+# ==========================================
+ARQUIVO_DIARIO = "banco_de_dados_ultron.csv"
+
+def salvar_caixa_preta():
+    if st.session_state.tracker:
+        df = pd.DataFrame(st.session_state.tracker)
+        df.to_csv(ARQUIVO_DIARIO, index=False)
+
 if "tracker" not in st.session_state:
-    st.session_state.tracker = []
-if "historico_ids" not in st.session_state:
-    st.session_state.historico_ids = set()
+    if os.path.exists(ARQUIVO_DIARIO):
+        try:
+            df_mem = pd.read_csv(ARQUIVO_DIARIO)
+            df_mem['entry_time'] = pd.to_datetime(df_mem['entry_time'])
+            st.session_state.tracker = df_mem.to_dict('records')
+            st.session_state.historico_ids = set(df_mem['id'].tolist())
+        except:
+            st.session_state.tracker = []
+            st.session_state.historico_ids = set()
+    else:
+        st.session_state.tracker = []
+        st.session_state.historico_ids = set()
 
 # ==========================================
 # COMUNICAÇÃO BLINDADA
@@ -63,6 +83,7 @@ def registrar_no_tracker(d, id_unico, ticker):
             "sl": d['sl'], "tp1": d['tp1'], "tp2": d['tp2'], "tp3": d['tp3'],
             "status": "ATIVO 🟡", "entry_time": d['tempo_vela']
         })
+        salvar_caixa_preta() # Grava imediatamente a nova entrada
         
         seta = "🚀" if "COMPRA" in d['tipo'] else "🧨"
         casas = ESPECIFICACOES_CME.get(ticker, {"casas": 5})["casas"]
@@ -91,7 +112,6 @@ def calcular_atr(df, period=14):
 def mapear_noticias_alto_impacto():
     hoje = datetime.datetime.now(pytz.timezone('America/New_York')).strftime('%Y-%m-%d')
     eventos_perigosos = []
-    
     try:
         if "FINNHUB_TOKEN" in st.secrets:
             token = st.secrets["FINNHUB_TOKEN"]
@@ -362,14 +382,16 @@ with col2:
     if st.button("🧹 Limpar Todos os Diários", use_container_width=True):
         st.session_state.tracker = []
         st.session_state.historico_ids = set() 
+        if os.path.exists(ARQUIVO_DIARIO):
+            os.remove(ARQUIVO_DIARIO) # Aniquila o arquivo físico no botão de limpar
         st.rerun()
 
 @st.fragment(run_every="20s")
 def renderizar_painel_operacional():
     df_dxy = fetch_redundante("DX=F", "2d", "5m") 
+    houve_alteracao_status = False
     
     container_mestre = st.container()
-    
     nomes_abas = [NOMES_EXIBICAO.get(t, t) for t in TICKERS_ALVOS]
     tabs = st.tabs(nomes_abas)
     
@@ -418,26 +440,46 @@ def renderizar_painel_operacional():
                                     
                                     if "COMPRA" in t['tipo']:
                                         novo_sl = h - atr_trailing
-                                        if novo_sl > t['sl']: t['sl'] = round(novo_sl, casas) 
+                                        if novo_sl > t['sl']: 
+                                            t['sl'] = round(novo_sl, casas)
+                                            houve_alteracao_status = True
                                         if l <= t['sl'] and t['status'] == "ATIVO 🟡": 
                                             t['status'] = "STOP TRAILING 🛡️" if t['sl'] > t['ent'] else "LOSS TÉCNICO 🔴"
+                                            houve_alteracao_status = True
                                             break
-                                        elif h >= t['tp3']: t['status'] = "WIN TP3 👑"; break
-                                        elif h >= t['tp1'] and t['status'] == "ATIVO 🟡": t['status'] = "WIN TP1 🟢"
+                                        elif h >= t['tp3']: 
+                                            t['status'] = "WIN TP3 👑"
+                                            houve_alteracao_status = True
+                                            break
+                                        elif h >= t['tp1'] and t['status'] == "ATIVO 🟡": 
+                                            t['status'] = "WIN TP1 🟢"
+                                            houve_alteracao_status = True
                                     else: 
                                         novo_sl = l + atr_trailing
-                                        if novo_sl < t['sl']: t['sl'] = round(novo_sl, casas) 
+                                        if novo_sl < t['sl']: 
+                                            t['sl'] = round(novo_sl, casas)
+                                            houve_alteracao_status = True
                                         if h >= t['sl'] and t['status'] == "ATIVO 🟡": 
                                             t['status'] = "STOP TRAILING 🛡️" if t['sl'] < t['ent'] else "LOSS TÉCNICO 🔴"
+                                            houve_alteracao_status = True
                                             break
-                                        elif l <= t['tp3']: t['status'] = "WIN TP3 👑"; break
-                                        elif l <= t['tp1'] and t['status'] == "ATIVO 🟡": t['status'] = "WIN TP1 🟢"
+                                        elif l <= t['tp3']: 
+                                            t['status'] = "WIN TP3 👑"
+                                            houve_alteracao_status = True
+                                            break
+                                        elif l <= t['tp1'] and t['status'] == "ATIVO 🟡": 
+                                            t['status'] = "WIN TP1 🟢"
+                                            houve_alteracao_status = True
                         
                         tabela = pd.DataFrame(tracker_filtrado).drop(columns=['id', 'entry_time', 'ativo'], errors='ignore')
                         st.dataframe(tabela.iloc[::-1], use_container_width=True, hide_index=True) 
                     else: st.caption(f"Aguardando alinhamento do {NOMES_EXIBICAO.get(ticker, ticker)}...")
                 else: st.error("❌ Falha na conexão de dados.")
             except Exception as e: st.error(f"💣 ERRO: {str(e)}")
+
+    # Salva na caixa-preta se o Trailing Stop mexer nos dados
+    if houve_alteracao_status:
+        salvar_caixa_preta()
 
     with container_mestre:
         st.markdown("<h4 style='color: #003366;'>🦅 DIÁRIO DE BATALHA MESTRE & HUD DE RISCO</h4>", unsafe_allow_html=True)
@@ -452,7 +494,7 @@ def renderizar_painel_operacional():
                     specs = ESPECIFICACOES_CME.get(ticker_original, ESPECIFICACOES_CME["M6E=F"])
                     distancia_pontos = abs(t['ent'] - t['sl'])
                     pips = distancia_pontos * specs["mult_pip"]
-                    risco_usd = pips * specs["valor_ponto"] * 1 # Lote cravado em 1
+                    risco_usd = pips * specs["valor_ponto"] * 1
                     risco_total += risco_usd
                 
                 c1, c2, c3 = st.columns(3)
@@ -466,7 +508,6 @@ def renderizar_painel_operacional():
                 c3.metric("Status do Pelotão", "Aguardando Alvos 📡")
             
             st.divider()
-            
             tabela_mestre = pd.DataFrame(st.session_state.tracker).drop(columns=['id', 'entry_time'], errors='ignore')
             cols = tabela_mestre.columns.tolist()
             if 'ativo' in cols:
@@ -480,7 +521,7 @@ def renderizar_painel_operacional():
             c1.metric("Frentes Ativas", 0)
             c2.metric("Risco Global (Stop-Loss)", "$0.00")
             c3.metric("Status do Pelotão", "Radar Varrendo 📡")
-            st.info("Nenhuma operação registrada no diário. A máquina está patrulhando as trincheiras...")
+            st.info("Nenhuma operação registrada no diário. A caixa-preta está ativa e patrulhando as trincheiras...")
             st.divider()
 
 renderizar_painel_operacional()
