@@ -14,7 +14,7 @@ import os
 # ==========================================
 # CONFIGURAÇÕES DA PÁGINA
 # ==========================================
-st.set_page_config(page_title="ULTRON FOREX SQUAD", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="ULTRON FOREX SQUAD - V2", layout="wide", initial_sidebar_state="collapsed")
 st.markdown("<style>[data-testid='stMetricValue']{font-size: 1.4rem !important;}[data-testid='stMetricLabel']{font-size: 0.9rem !important;}</style>", unsafe_allow_html=True)
 
 # ==========================================
@@ -35,9 +35,6 @@ ESPECIFICACOES_CME = {
     "MBT=F": {"valor_ponto": 0.10, "casas": 2, "mult_pip": 1, "moeda_base": "BTC"} 
 }
 
-# ==========================================
-# CAIXA-PRETA: BANCO DE DADOS PERSISTENTE
-# ==========================================
 ARQUIVO_DIARIO = "banco_de_dados_ultron.csv"
 
 def salvar_caixa_preta():
@@ -83,7 +80,7 @@ def registrar_no_tracker(d, id_unico, ticker):
             "sl": d['sl'], "tp1": d['tp1'], "tp2": d['tp2'], "tp3": d['tp3'],
             "status": "ATIVO 🟡", "entry_time": d['tempo_vela']
         })
-        salvar_caixa_preta() # Grava imediatamente a nova entrada
+        salvar_caixa_preta()
         
         seta = "🚀" if "COMPRA" in d['tipo'] else "🧨"
         casas = ESPECIFICACOES_CME.get(ticker, {"casas": 5})["casas"]
@@ -98,257 +95,127 @@ def registrar_no_tracker(d, id_unico, ticker):
         return True
     return False
 
-def calcular_atr(df, period=14):
-    high_low = df['High'] - df['Low']
-    high_close = np.abs(df['High'] - df['Close'].shift())
-    low_close = np.abs(df['Low'] - df['Close'].shift())
-    atr = np.max(pd.concat([high_low, high_close, low_close], axis=1), axis=1).rolling(period).mean().iloc[-1]
-    return atr if not np.isnan(atr) else (100.0 if df['Close'].iloc[-1] > 1000 else 0.0020)
-
 # ==========================================
-# ESCUDO MACROECONÔMICO DINÂMICO (API)
-# ==========================================
-@st.cache_data(ttl=3600, show_spinner=False)
-def mapear_noticias_alto_impacto():
-    hoje = datetime.datetime.now(pytz.timezone('America/New_York')).strftime('%Y-%m-%d')
-    eventos_perigosos = []
-    try:
-        if "FINNHUB_TOKEN" in st.secrets:
-            token = st.secrets["FINNHUB_TOKEN"]
-            url = f"https://finnhub.io/api/v1/economic?from={hoje}&to={hoje}&token={token}"
-            resposta = requests.get(url, timeout=5)
-            if resposta.status_code == 200:
-                dados = resposta.json()
-                for evento in dados:
-                    if evento.get('impact') == 'high' or evento.get('impact') == 3:
-                        hora_evento = datetime.datetime.strptime(evento['time'], '%Y-%m-%d %H:%M:%S').replace(tzinfo=pytz.utc)
-                        hora_ny = hora_evento.astimezone(pytz.timezone('America/New_York'))
-                        eventos_perigosos.append({
-                            "moeda": evento.get('country'),
-                            "hora": hora_ny,
-                            "evento": evento.get('event')
-                        })
-                return eventos_perigosos
-    except: pass
-    return "FALHA_API"
-
-# ==========================================
-# ULTRON ENGINE MULTI-ATIVOS
+# MOTOR QUÂNTICO & ML INSTITUCIONAL
 # ==========================================
 class UltronEngineForex:
-    def __init__(self, dfs, atr, ticker): 
+    def __init__(self, dfs, ticker): 
         self.dfs = dfs
-        self.atr = atr
         self.ticker = ticker
         self.specs = ESPECIFICACOES_CME.get(ticker, {"valor_ponto": 1.0, "casas": 5, "mult_pip": 10000, "moeda_base": "USD"})
-        self.calendario_macro = mapear_noticias_alto_impacto()
+        self.df_m5 = self._calcular_indicadores_institucionais(self.dfs.get('M5').copy() if self.dfs.get('M5') is not None else None)
+        self.atr = float(self.df_m5['ATR'].iloc[-1]) if self.df_m5 is not None else 0.0020
+
+    def _calcular_indicadores_institucionais(self, df):
+        if df is None or len(df) < 200: return df
+        
+        # ATR para Risco
+        high_low = df['High'] - df['Low']
+        high_close = np.abs(df['High'] - df['Close'].shift())
+        low_close = np.abs(df['Low'] - df['Close'].shift())
+        df['ATR'] = np.max(pd.concat([high_low, high_close, low_close], axis=1), axis=1).rolling(14).mean()
+
+        # EMA 200 (Filtro Macro de Tendência)
+        df['EMA_200'] = df['Close'].ewm(span=200, adjust=False).mean()
+
+        # Bandas de Bollinger (Exaustão Estatística)
+        df['SMA_20'] = df['Close'].rolling(window=20).mean()
+        std_20 = df['Close'].rolling(window=20).std()
+        df['BB_UPPER'] = df['SMA_20'] + (std_20 * 2.0)
+        df['BB_LOWER'] = df['SMA_20'] - (std_20 * 2.0)
+
+        # RSI 14 (Confirmação de Momento)
+        delta = df['Close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        rs = gain / loss
+        df['RSI_14'] = 100 - (100 / (1 + rs))
+
+        return df
 
     def verificar_escudo_macro(self, tempo_vela_atual):
         t_ny = tempo_vela_atual.time()
+        dia_semana = tempo_vela_atual.weekday() # 4 = Sexta-feira
+
+        # Bloqueio Absoluto de Sexta-feira (Toxic Flow Prevention)
+        if dia_semana == 4 and t_ny >= datetime.time(15, 0):
+            return "🛡️ Bloqueio Macro: Fim de Sessão de Sexta-feira (Spread Tóxico)"
         
         if datetime.time(16, 50) <= t_ny <= datetime.time(18, 5):
             return "🛡️ Bloqueio Macro: Manutenção Diária CME (17:00 NY)"
-
-        if isinstance(self.calendario_macro, list):
-            for evento in self.calendario_macro:
-                moeda_evento = evento["moeda"]
-                hora_evento = evento["hora"]
-                
-                if moeda_evento in ["US", self.specs["moeda_base"]]:
-                    janela_inicio = hora_evento - datetime.timedelta(minutes=30)
-                    janela_fim = hora_evento + datetime.timedelta(minutes=15)
-                    
-                    if janela_inicio <= tempo_vela_atual <= janela_fim:
-                        nome_evento = evento["evento"]
-                        return f"🛡️ Bloqueio Macro: {nome_evento} ({moeda_evento}) em andamento."
         
-        elif self.calendario_macro == "FALHA_API":
-            if datetime.time(8, 15) <= t_ny <= datetime.time(8, 45):
-                return "🛡️ Bloqueio Backup: Janela de Dados (08:30 NY)"
-            if datetime.time(13, 45) <= t_ny <= datetime.time(14, 30):
-                return "🛡️ Bloqueio Backup: Janela FED/Bancos Centrais"
+        if datetime.time(8, 15) <= t_ny <= datetime.time(8, 45):
+            return "🛡️ Bloqueio Backup: Janela de Dados (08:30 NY)"
+        if datetime.time(13, 45) <= t_ny <= datetime.time(14, 30):
+            return "🛡️ Bloqueio Backup: Janela FED/Bancos Centrais"
 
         return "LIVRE"
 
-    def calcular_risco_dinamico(self, preco_entrada, atr_atual, tipo_ordem):
-        if atr_atual < (preco_entrada * 0.0005): 
-            regime_vol = "Calmaria"
-            multiplicador_sl = 1.5
-            lotes = 1 
-        elif atr_atual > (preco_entrada * 0.0015):
-            regime_vol = "Caos Estocástico"
-            multiplicador_sl = 3.0
-            lotes = 1 
-        else:
-            regime_vol = "Volatilidade Padrão"
-            multiplicador_sl = 2.0
-            lotes = 1
-        
-        stop_pontos = atr_atual * multiplicador_sl
+    def calcular_risco_dinamico(self, preco_entrada, tipo_ordem):
+        multiplicador_sl = 2.0
+        stop_pontos = self.atr * multiplicador_sl
         pips_de_stop = stop_pontos * self.specs["mult_pip"]
+        
+        # Rigor absoluto no lote: 1 micro contrato
+        lotes = 1 
         risco_financeiro_organico = pips_de_stop * self.specs["valor_ponto"] * lotes 
         casas = self.specs["casas"]
         
         if tipo_ordem == "COMPRA":
             sl_price = preco_entrada - stop_pontos
-            tp1 = preco_entrada + (stop_pontos * 1.0)
-            tp2 = preco_entrada + (stop_pontos * 2.0)
-            tp3 = preco_entrada + (stop_pontos * 3.0)
+            tp1 = preco_entrada + (stop_pontos * 1.5)
+            tp2 = preco_entrada + (stop_pontos * 2.5)
+            tp3 = preco_entrada + (stop_pontos * 4.0)
         else:
             sl_price = preco_entrada + stop_pontos
-            tp1 = preco_entrada - (stop_pontos * 1.0)
-            tp2 = preco_entrada - (stop_pontos * 2.0)
-            tp3 = preco_entrada - (stop_pontos * 3.0)
+            tp1 = preco_entrada - (stop_pontos * 1.5)
+            tp2 = preco_entrada - (stop_pontos * 2.5)
+            tp3 = preco_entrada - (stop_pontos * 4.0)
             
         return {
-            "regime_vol": regime_vol, "lotes": lotes, "risco_usd": round(risco_financeiro_organico, 2),
+            "lotes": lotes, "risco_usd": round(risco_financeiro_organico, 2),
             "sl": round(sl_price, casas), "tp1": round(tp1, casas), "tp2": round(tp2, casas), "tp3": round(tp3, casas)
         }
 
-    def cerebro_estocastico_garch(self, precos, direcao, periodos_frente=12, simulacoes=2000):
-        retornos = np.log(precos / precos.shift(1)).dropna()
-        omega = np.var(retornos) * 0.05
-        alpha = 0.15
-        beta = 0.80
-        sigma2 = np.var(retornos)
-        for r in retornos[-50:]: sigma2 = omega + alpha * (r**2) + beta * sigma2
-        
-        vol_projetada = np.sqrt(sigma2)
-        mu = np.mean(retornos)
-        S0 = precos.iloc[-1]
-        dt = 1 
-        Z = np.random.standard_normal((periodos_frente, simulacoes))
-        caminhos = np.zeros((periodos_frente, simulacoes))
-        caminhos[0] = S0
-        
-        for t in range(1, periodos_frente):
-            caminhos[t] = caminhos[t-1] * np.exp((mu - 0.5 * vol_projetada**2) * dt + vol_projetada * np.sqrt(dt) * Z[t])
-            
-        preco_final = caminhos[-1]
-        probabilidade = np.sum(preco_final > S0) / simulacoes if direcao == "COMPRA" else np.sum(preco_final < S0) / simulacoes
-        return probabilidade
-
-    def calcular_poc_institucional(self):
-        m5 = self.dfs.get('M5')
-        if m5 is None or len(m5) < 200: return 0.0
-        df_recente = m5.tail(200).copy()
-        if df_recente['Volume'].sum() == 0: return float(df_recente['Close'].iloc[-1])
-        precos_tipicos = (df_recente['High'] + df_recente['Low'] + df_recente['Close']) / 3
-        volumes = df_recente['Volume']
-        bins = np.linspace(precos_tipicos.min(), precos_tipicos.max(), 51)
-        volume_por_bin = [volumes[(precos_tipicos >= bins[i]) & (precos_tipicos < bins[i+1])].sum() for i in range(50)]
-        return (bins[np.argmax(volume_por_bin)] + bins[np.argmax(volume_por_bin)+1]) / 2
-
-    def calcular_order_blocks(self):
-        m5 = self.dfs.get('M5')
-        if m5 is None or len(m5) < 30: return 0.0, 0.0
-        df = m5.tail(30)
-        ob_bullish, ob_bearish = 0.0, 0.0
-        for i in range(len(df)-2, 1, -1):
-            if df['Close'].iloc[i] > df['Open'].iloc[i] and (df['High'].iloc[i] - df['Low'].iloc[i]) > self.atr:
-                for j in range(i-1, max(0, i-5), -1):
-                    if df['Close'].iloc[j] < df['Open'].iloc[j]: ob_bullish = df['Low'].iloc[j]; break
-                if ob_bullish > 0: break
-        for i in range(len(df)-2, 1, -1):
-            if df['Close'].iloc[i] < df['Open'].iloc[i] and (df['High'].iloc[i] - df['Low'].iloc[i]) > self.atr:
-                for j in range(i-1, max(0, i-5), -1):
-                    if df['Close'].iloc[j] > df['Open'].iloc[j]: ob_bearish = df['High'].iloc[j]; break
-                if ob_bearish > 0: break
-        return ob_bullish, ob_bearish
-
-    def identificar_fase_mercado(self):
-        h1 = self.dfs.get('H1')
-        if h1 is None or len(h1) < 50: return "Desconhecida"
-        close, sma20, sma50 = h1['Close'].iloc[-1], h1['Close'].rolling(20).mean().iloc[-1], h1['Close'].rolling(50).mean().iloc[-1]
-        if close > sma20 > sma50: return "2. Uptrend"
-        elif close < sma20 < sma50: return "4. Downtrend"
-        elif close >= sma50 and abs(close - sma20) < self.atr: return "3. Distribution"
-        else: return "1. Accumulation"
-
-    def validar_rejeicao_vshape(self, vela):
-        o, c, h, l = vela['Open'], vela['Close'], vela['High'], vela['Low']
-        body = abs(o - c)
-        if min(o, c) - l > (body * 2.5) and (min(o, c) - l) > (h - max(o, c)): return "ALTA", l
-        if h - max(o, c) > (body * 2.5) and (h - max(o, c)) > (min(o, c) - l): return "BAIXA", h
-        return None, None
-
-    def detectar_fvg(self):
-        m5 = self.dfs.get('M5')
-        if m5 is None or len(m5) < 4: return None
-        v1, v2, v3 = m5.iloc[-4], m5.iloc[-3], m5.iloc[-2]
-        range_v2 = v2['High'] - v2['Low']
-        body_v2 = abs(v2['Open'] - v2['Close'])
-        if v3['Low'] > v1['High'] and range_v2 > 0 and (body_v2 / range_v2) > 0.5: return "FVG_ALTA"
-        if v3['High'] < v1['Low'] and range_v2 > 0 and (body_v2 / range_v2) > 0.5: return "FVG_BAIXA"
-        return None
-
     def escanear_mercado_hft(self):
-        m5 = self.dfs.get('M5')
-        if m5 is None or m5.empty: return {"status": "Aguardando Dados"}
-        fase_atual = self.identificar_fase_mercado()
+        if self.df_m5 is None or self.df_m5.empty or pd.isna(self.df_m5['EMA_200'].iloc[-1]): 
+            return {"status": "Aguardando Aquecimento do Motor (EMA 200)"}
         
         try:
-            tempo_vela_atual = m5.index[-1].replace(tzinfo=pytz.timezone('America/New_York'))
+            tempo_vela_atual = self.df_m5.index[-1].replace(tzinfo=pytz.timezone('America/New_York'))
             status_escudo = self.verificar_escudo_macro(tempo_vela_atual)
             if status_escudo != "LIVRE":
                 return {"status": status_escudo}
 
-            p_live = float(m5['Close'].iloc[-1])
-            vela_atual_m5, ultima_vela_fechada = m5.iloc[-1], m5.iloc[-2]
-            tipo_rejeicao, extremo_pavio = self.validar_rejeicao_vshape(ultima_vela_fechada)
-            range_vela = vela_atual_m5['High'] - vela_atual_m5['Low']
-            body_percent = abs(vela_atual_m5['Open'] - vela_atual_m5['Close']) / range_vela if range_vela > 0 else 0
+            p_live = float(self.df_m5['Close'].iloc[-1])
+            vela_anterior = self.df_m5.iloc[-2]
+            ema_200 = self.df_m5['EMA_200'].iloc[-1]
             
-            breakout_compra = p_live > float(m5.tail(8)['High'].max()) and body_percent > 0.6
-            breakout_venda = p_live < float(m5.tail(8)['Low'].min()) and body_percent > 0.6
-            caixote_high, caixote_low = float(m5.tail(16).iloc[:-1]['High'].max()), float(m5.tail(16).iloc[:-1]['Low'].min())
-            sweep_compra = (vela_atual_m5['Low'] < caixote_low) and (p_live > caixote_low) and (vela_atual_m5['Close'] > vela_atual_m5['Open'])
-            sweep_venda = (vela_atual_m5['High'] > caixote_high) and (p_live < caixote_high) and (vela_atual_m5['Close'] < vela_atual_m5['Open'])
-            mss_compra = p_live > float(m5.tail(12).iloc[:-2]['High'].max())
-            mss_venda = p_live < float(m5.tail(12).iloc[:-2]['Low'].min())
-
-            if "Accumulation" in fase_atual or "Distribution" in fase_atual: breakout_compra, breakout_venda = False, False
-            elif "Uptrend" in fase_atual: sweep_venda, breakout_venda = False, False; tipo_rejeicao = None if tipo_rejeicao == "BAIXA" else tipo_rejeicao
-            elif "Downtrend" in fase_atual: sweep_compra, breakout_compra = False, False; tipo_rejeicao = None if tipo_rejeicao == "ALTA" else tipo_rejeicao
-
-            fvg_atual = self.detectar_fvg()
-            confirma_compra, confirma_venda = True, True
-            if "MBT" not in self.ticker: 
-                dxy = self.dfs.get('DXY')
-                if dxy is not None and not dxy.empty and len(dxy) >= 3:
-                    dxy_direcao = dxy['Close'].iloc[-1] - dxy['Close'].iloc[-3]
-                    if dxy_direcao >= 0: confirma_compra = False 
-                    if dxy_direcao <= 0: confirma_venda = False  
-
-            if tipo_rejeicao == "ALTA" or sweep_compra or (breakout_compra and fvg_atual == "FVG_ALTA" and mss_compra):
-                if not confirma_compra: return {"status": "Bloqueio DXY: Dólar subindo (Risco de Fakeout)"}
-                prob_sucesso = self.cerebro_estocastico_garch(m5['Close'], "COMPRA")
-                if prob_sucesso >= 0.55:
-                    motivo = "Sweep" if sweep_compra else ("V-Shape" if tipo_rejeicao == "ALTA" else "Triad: Break+FVG+MSS")
-                    risco_data = self.calcular_risco_dinamico(p_live, self.atr, "COMPRA")
+            # LÓGICA INSTITUCIONAL DE REVERSÃO COM FILTRO DE TENDÊNCIA
+            # Sinal de COMPRA: Preço estruturalmente em ALTA (acima da EMA 200), mas sofreu correção extrema
+            if p_live > ema_200:
+                if (vela_anterior['Close'] < vela_anterior['BB_LOWER']) and (vela_anterior['RSI_14'] < 30.0):
+                    risco_data = self.calcular_risco_dinamico(p_live, "COMPRA")
                     return {"status": "Sinal Encontrado", "dados": {
-                        "tipo": "COMPRA", "fase": fase_atual, "motivo": f"{motivo} | {risco_data['regime_vol']} | Prob: {prob_sucesso:.1%} | Lotes: {risco_data['lotes']}", 
+                        "tipo": "COMPRA", "fase": "Tendência de Alta (Correção)", "motivo": f"BB_Lower Pierce + RSI Oversold | Risco: ${risco_data['risco_usd']}", 
                         "entrada": p_live, "sl": risco_data['sl'], "tp1": risco_data['tp1'], "tp2": risco_data['tp2'], "tp3": risco_data['tp3'], 
                         "tempo_vela": tempo_vela_atual.replace(tzinfo=None), "id": f"BUY_{self.ticker}_{tempo_vela_atual.strftime('%H%M')}"}}
-                else: return {"status": f"Bloqueio Monte Carlo: Probabilidade Compra Baixa ({prob_sucesso:.1%})"}
             
-            elif tipo_rejeicao == "BAIXA" or sweep_venda or (breakout_venda and fvg_atual == "FVG_BAIXA" and mss_venda):
-                if not confirma_venda: return {"status": "Bloqueio DXY: Dólar caindo (Risco de Fakeout)"}
-                prob_sucesso = self.cerebro_estocastico_garch(m5['Close'], "VENDA")
-                if prob_sucesso >= 0.55:
-                    motivo = "Sweep" if sweep_venda else ("V-Shape" if tipo_rejeicao == "BAIXA" else "Triad: Break+FVG+MSS")
-                    risco_data = self.calcular_risco_dinamico(p_live, self.atr, "VENDA")
+            # Sinal de VENDA: Preço estruturalmente em BAIXA (abaixo da EMA 200), mas sofreu repique extremo
+            elif p_live < ema_200:
+                if (vela_anterior['Close'] > vela_anterior['BB_UPPER']) and (vela_anterior['RSI_14'] > 70.0):
+                    risco_data = self.calcular_risco_dinamico(p_live, "VENDA")
                     return {"status": "Sinal Encontrado", "dados": {
-                        "tipo": "VENDA", "fase": fase_atual, "motivo": f"{motivo} | {risco_data['regime_vol']} | Prob: {prob_sucesso:.1%} | Lotes: {risco_data['lotes']}", 
+                        "tipo": "VENDA", "fase": "Tendência de Baixa (Repique)", "motivo": f"BB_Upper Pierce + RSI Overbought | Risco: ${risco_data['risco_usd']}", 
                         "entrada": p_live, "sl": risco_data['sl'], "tp1": risco_data['tp1'], "tp2": risco_data['tp2'], "tp3": risco_data['tp3'], 
                         "tempo_vela": tempo_vela_atual.replace(tzinfo=None), "id": f"SELL_{self.ticker}_{tempo_vela_atual.strftime('%H%M')}"}}
-                else: return {"status": f"Bloqueio Monte Carlo: Probabilidade Venda Baixa ({prob_sucesso:.1%})"}
 
-            return {"status": f"Vigília SMC | Fase: {fase_atual}"}
-        except Exception as e: return {"status": f"Erro interno: {e}"}
+            distancia_ema = abs(p_live - ema_200) / p_live * 100
+            return {"status": f"Vigília Quântica | Distância EMA 200: {distancia_ema:.2f}%"}
+        except Exception as e: return {"status": f"Erro interno no Motor: {e}"}
 
 # ==========================================
-# FETCH DE DADOS BLINDADO (COM FALLBACKS)
+# FETCH DE DADOS BLINDADO
 # ==========================================
 @st.cache_data(ttl=60, show_spinner=False)
 def fetch_redundante(ticker, p, i):
@@ -373,24 +240,21 @@ def fetch_redundante(ticker, p, i):
     return None
 
 # ==========================================
-# INTERFACE MULTI-ATIVOS (TABS E DIÁRIO MESTRE)
+# INTERFACE DA MATRIZ
 # ==========================================
-st.markdown("<h2 style='text-align: center; color: black;'>🌍 ULTRON FOREX SQUAD</h2>", unsafe_allow_html=True)
+st.markdown("<h2 style='text-align: center; color: black;'>🌍 ULTRON FOREX SQUAD - V2 INSTITUCIONAL</h2>", unsafe_allow_html=True)
 
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
     if st.button("🧹 Limpar Todos os Diários", use_container_width=True):
         st.session_state.tracker = []
         st.session_state.historico_ids = set() 
-        if os.path.exists(ARQUIVO_DIARIO):
-            os.remove(ARQUIVO_DIARIO) # Aniquila o arquivo físico no botão de limpar
+        if os.path.exists(ARQUIVO_DIARIO): os.remove(ARQUIVO_DIARIO)
         st.rerun()
 
 @st.fragment(run_every="20s")
 def renderizar_painel_operacional():
-    df_dxy = fetch_redundante("DX=F", "2d", "5m") 
     houve_alteracao_status = False
-    
     container_mestre = st.container()
     nomes_abas = [NOMES_EXIBICAO.get(t, t) for t in TICKERS_ALVOS]
     tabs = st.tabs(nomes_abas)
@@ -398,26 +262,26 @@ def renderizar_painel_operacional():
     for i, ticker in enumerate(TICKERS_ALVOS):
         with tabs[i]:
             try:
-                dfs = {
-                    'M5': fetch_redundante(ticker, "2d", "5m"), 
-                    'H1': fetch_redundante(ticker, "15d", "1h"),
-                    'DXY': df_dxy
-                }
+                dfs = {'M5': fetch_redundante(ticker, "5d", "5m")}
                 
-                if dfs['M5'] is not None and dfs['H1'] is not None:
-                    engine = UltronEngineForex(dfs, calcular_atr(dfs['M5']) * 1.5, ticker)
+                if dfs['M5'] is not None:
+                    engine = UltronEngineForex(dfs, ticker)
                     casas = engine.specs["casas"]
                     
                     c1, c2, c3, c4 = st.columns(4)
                     p_live = float(dfs['M5']['Close'].iloc[-1])
                     c1.metric(f"Ativo", f"{p_live:.{casas}f}")
-                    c2.metric("Market Phase", engine.identificar_fase_mercado().split(' ')[0])
                     
-                    poc = engine.calcular_poc_institucional()
-                    c3.metric("POC Institucional", f"{poc:.{casas}f}" if poc > 0 else "Processando...")
-                    
-                    ob_bull, ob_bear = engine.calcular_order_blocks()
-                    c4.metric("Order Blocks (OB)", f"S: {ob_bull:.{casas}f} | R: {ob_bear:.{casas}f}")
+                    if not pd.isna(engine.df_m5['EMA_200'].iloc[-1]):
+                        ema_val = engine.df_m5['EMA_200'].iloc[-1]
+                        c2.metric("Tendência Macro", "ALTA 🐂" if p_live > ema_val else "BAIXA 🐻")
+                        c3.metric("EMA 200", f"{ema_val:.{casas}f}")
+                    else:
+                        c2.metric("Tendência Macro", "Calculando...")
+                        c3.metric("EMA 200", "Aguardando barras")
+                        
+                    rsi_val = engine.df_m5['RSI_14'].iloc[-1] if not pd.isna(engine.df_m5['RSI_14'].iloc[-1]) else 50.0
+                    c4.metric("RSI (Exaustão)", f"{rsi_val:.1f}")
                     
                     operacoes_ativas = [t for t in st.session_state.tracker if t['status'] == "ATIVO 🟡" and t['ativo'] == NOMES_EXIBICAO.get(ticker, ticker)]
                     an = {'status': f"🔒 Gatilho Bloqueado: Posição Ativa neste ativo."} if operacoes_ativas else engine.escanear_mercado_hft()
@@ -477,51 +341,32 @@ def renderizar_painel_operacional():
                 else: st.error("❌ Falha na conexão de dados.")
             except Exception as e: st.error(f"💣 ERRO: {str(e)}")
 
-    # Salva na caixa-preta se o Trailing Stop mexer nos dados
-    if houve_alteracao_status:
-        salvar_caixa_preta()
+    if houve_alteracao_status: salvar_caixa_preta()
 
     with container_mestre:
         st.markdown("<h4 style='color: #003366;'>🦅 DIÁRIO DE BATALHA MESTRE & HUD DE RISCO</h4>", unsafe_allow_html=True)
-        
         if st.session_state.tracker:
             tracker_ativos = [t for t in st.session_state.tracker if t['status'] == "ATIVO 🟡"]
-            risco_total = 0.0
+            risco_total = sum([abs(t['ent'] - t['sl']) * ESPECIFICACOES_CME.get(next((k for k, v in NOMES_EXIBICAO.items() if v == t['ativo']), "M6E=F"), ESPECIFICACOES_CME["M6E=F"])["mult_pip"] * ESPECIFICACOES_CME.get(next((k for k, v in NOMES_EXIBICAO.items() if v == t['ativo']), "M6E=F"), ESPECIFICACOES_CME["M6E=F"])["valor_ponto"] for t in tracker_ativos])
             
-            if tracker_ativos:
-                for t in tracker_ativos:
-                    ticker_original = next((k for k, v in NOMES_EXIBICAO.items() if v == t['ativo']), "M6E=F")
-                    specs = ESPECIFICACOES_CME.get(ticker_original, ESPECIFICACOES_CME["M6E=F"])
-                    distancia_pontos = abs(t['ent'] - t['sl'])
-                    pips = distancia_pontos * specs["mult_pip"]
-                    risco_usd = pips * specs["valor_ponto"] * 1
-                    risco_total += risco_usd
-                
-                c1, c2, c3 = st.columns(3)
-                c1.metric("Frentes Ativas", len(tracker_ativos))
-                c2.metric("Risco Global (Stop-Loss)", f"${risco_total:.2f}")
-                c3.metric("Status do Pelotão", "Em Combate ⚔️")
-            else:
-                c1, c2, c3 = st.columns(3)
-                c1.metric("Frentes Ativas", 0)
-                c2.metric("Risco Global (Stop-Loss)", "$0.00")
-                c3.metric("Status do Pelotão", "Aguardando Alvos 📡")
-            
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Frentes Ativas", len(tracker_ativos))
+            c2.metric("Risco Global (Stop-Loss)", f"${risco_total:.2f}")
+            c3.metric("Status do Pelotão", "Em Combate ⚔️" if tracker_ativos else "Aguardando Alvos 📡")
             st.divider()
+            
             tabela_mestre = pd.DataFrame(st.session_state.tracker).drop(columns=['id', 'entry_time'], errors='ignore')
             cols = tabela_mestre.columns.tolist()
             if 'ativo' in cols:
                 cols.insert(0, cols.pop(cols.index('ativo')))
                 tabela_mestre = tabela_mestre[cols]
-
             st.dataframe(tabela_mestre.iloc[::-1], use_container_width=True, hide_index=True)
-            st.divider()
         else:
             c1, c2, c3 = st.columns(3)
             c1.metric("Frentes Ativas", 0)
-            c2.metric("Risco Global (Stop-Loss)", "$0.00")
-            c3.metric("Status do Pelotão", "Radar Varrendo 📡")
-            st.info("Nenhuma operação registrada no diário. A caixa-preta está ativa e patrulhando as trincheiras...")
-            st.divider()
+            c2.metric("Risco Global", "$0.00")
+            c3.metric("Status", "Radar Varrendo 📡")
+            st.info("Otimização de Reversão à Média ativa. Aguardando alinhamento perfeito de Bollinger, RSI e EMA 200.")
+        st.divider()
 
 renderizar_painel_operacional()
