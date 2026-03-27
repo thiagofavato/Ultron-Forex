@@ -19,11 +19,11 @@ st.markdown("<style>[data-testid='stMetricValue']{font-size: 1.4rem !important;}
 # ==========================================
 # ARSENAL DE ATIVOS COMEX/CME
 # ==========================================
-TICKERS_ALVOS = ["M6E=F", "M6B=F", "M6A=F", "MICD=F", "J7=F", "MET=F"] 
+TICKERS_ALVOS = ["M6E=F", "M6B=F", "M6A=F", "MICD=F", "MBT=F"] 
 NOMES_EXIBICAO = {
     "M6E=F": "Micro EUR/USD", "M6B=F": "Micro GBP/USD", 
     "M6A=F": "Micro AUD/USD", "MICD=F": "Micro CAD/USD", 
-    "J7=F": "E-Mini JPY", "MET=F": "Micro Ether"
+    "MBT=F": "Micro Bitcoin"
 }
 
 if "tracker" not in st.session_state:
@@ -100,7 +100,6 @@ class UltronEngineForex:
         
         stop_pontos = atr_atual * multiplicador_sl
         
-        # CÁLCULO DINÂMICO DE RISCO PURAMENTE MATEMÁTICO
         pips_de_stop = stop_pontos * 10000 
         risco_financeiro_organico = pips_de_stop * 1.25 * lotes 
         
@@ -243,7 +242,7 @@ class UltronEngineForex:
             fvg_atual = self.detectar_fvg()
 
             confirma_compra, confirma_venda = True, True
-            if "MET" not in self.ticker: 
+            if "MBT" not in self.ticker: # MBT não segue o DXY rigidamente
                 dxy = self.dfs.get('DXY')
                 if dxy is not None and not dxy.empty and len(dxy) >= 3:
                     dxy_direcao = dxy['Close'].iloc[-1] - dxy['Close'].iloc[-3]
@@ -283,12 +282,11 @@ class UltronEngineForex:
 @st.cache_data(ttl=60, show_spinner=False)
 def fetch_redundante(ticker, p, i):
     tickers_tentativas = [ticker]
-    if "MET" in ticker: tickers_tentativas.extend(["ETH-USD"]) 
+    if "MBT" in ticker: tickers_tentativas.extend(["BTC-USD"]) 
     if "MICD" in ticker: tickers_tentativas.extend(["MCD=F", "CAD=X"])
     if "M6E" in ticker: tickers_tentativas.extend(["EURUSD=X"])
     if "M6B" in ticker: tickers_tentativas.extend(["GBPUSD=X"])
     if "M6A" in ticker: tickers_tentativas.extend(["AUDUSD=X"])
-    if "J7" in ticker: tickers_tentativas.extend(["JPY=X"])
     
     for t in tickers_tentativas:
         for tentativa in range(2): 
@@ -318,7 +316,6 @@ with col2:
 def renderizar_painel_operacional():
     df_dxy = fetch_redundante("DX=F", "2d", "5m") 
     
-    # 1. ESPAÇO RESERVADO PARA O DIÁRIO MESTRE NO TOPO DA TELA
     container_mestre = st.container()
     
     nomes_abas = [NOMES_EXIBICAO.get(t, t) for t in TICKERS_ALVOS]
@@ -389,13 +386,11 @@ def renderizar_painel_operacional():
                 else: st.error("❌ Falha na conexão de dados.")
             except Exception as e: st.error(f"💣 ERRO: {str(e)}")
 
-    # 2. INJEÇÃO DA TABELA MESTRE APÓS OS CÁLCULOS
     with container_mestre:
         if st.session_state.tracker:
             st.markdown("<h4 style='color: #003366;'>🦅 DIÁRIO DE BATALHA MESTRE</h4>", unsafe_allow_html=True)
             tabela_mestre = pd.DataFrame(st.session_state.tracker).drop(columns=['id', 'entry_time'], errors='ignore')
             
-            # Reposicionando a coluna "ativo" para ser a primeira da tabela
             cols = tabela_mestre.columns.tolist()
             if 'ativo' in cols:
                 cols.insert(0, cols.pop(cols.index('ativo')))
