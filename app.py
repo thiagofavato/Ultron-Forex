@@ -57,12 +57,13 @@ def registrar_no_tracker(d, id_unico, ticker):
         })
         
         seta = "🚀" if "COMPRA" in d['tipo'] else "🧨"
+        casas = 2 if "MBT" in ticker else 5
         msg = f"{seta} <b>ULTRON FOREX | {NOMES_EXIBICAO.get(ticker, ticker)} | {d['tipo']}</b>\n"
-        msg += f"🎯 Entry: {d['entrada']:.5f}\n"
-        msg += f"🛡️ Stop: {d['sl']:.5f}\n\n"
+        msg += f"🎯 Entry: {d['entrada']:.{casas}f}\n"
+        msg += f"🛡️ Stop: {d['sl']:.{casas}f}\n\n"
         msg += f"Target Path:\n"
-        msg += f"🌲 TP1: {d['tp1']:.5f}\n"
-        msg += f"👑 TP3: {d['tp3']:.5f}\n\n"
+        msg += f"🌲 TP1: {d['tp1']:.{casas}f}\n"
+        msg += f"👑 TP3: {d['tp3']:.{casas}f}\n\n"
         msg += f"🧠 Phase: {html.escape(str(d['fase']))} | Setup: {html.escape(str(d['motivo']))}\n"
         enviar_telegram(msg)
         return True
@@ -73,7 +74,7 @@ def calcular_atr(df, period=14):
     high_close = np.abs(df['High'] - df['Close'].shift())
     low_close = np.abs(df['Low'] - df['Close'].shift())
     atr = np.max(pd.concat([high_low, high_close, low_close], axis=1), axis=1).rolling(period).mean().iloc[-1]
-    return atr if not np.isnan(atr) else 0.0020
+    return atr if not np.isnan(atr) else (100.0 if df['Close'].iloc[-1] > 1000 else 0.0020)
 
 # ==========================================
 # ULTRON ENGINE MULTI-ATIVOS
@@ -100,8 +101,15 @@ class UltronEngineForex:
         
         stop_pontos = atr_atual * multiplicador_sl
         
-        pips_de_stop = stop_pontos * 10000 
-        risco_financeiro_organico = pips_de_stop * 1.25 * lotes 
+        # CORREÇÃO MATEMÁTICA BTC VS FOREX
+        multiplicador_pip = 1 if "MBT" in self.ticker else 10000
+        pips_de_stop = stop_pontos * multiplicador_pip 
+        
+        # O Micro Bitcoin Futuro (MBT) paga $0.10 por ponto de movimento. Forex Micro paga ~$1.00-$1.25.
+        valor_tick = 0.10 if "MBT" in self.ticker else 1.25
+        risco_financeiro_organico = pips_de_stop * valor_tick * lotes 
+        
+        casas = 2 if "MBT" in self.ticker else 5
         
         if tipo_ordem == "COMPRA":
             sl_price = preco_entrada - stop_pontos
@@ -116,7 +124,7 @@ class UltronEngineForex:
             
         return {
             "regime_vol": regime_vol, "lotes": lotes, "risco_usd": round(risco_financeiro_organico, 2),
-            "sl": round(sl_price, 5), "tp1": round(tp1, 5), "tp2": round(tp2, 5), "tp3": round(tp3, 5)
+            "sl": round(sl_price, casas), "tp1": round(tp1, casas), "tp2": round(tp2, casas), "tp3": round(tp3, casas)
         }
 
     def cerebro_estocastico_garch(self, precos, direcao, periodos_frente=12, simulacoes=2000):
@@ -242,7 +250,7 @@ class UltronEngineForex:
             fvg_atual = self.detectar_fvg()
 
             confirma_compra, confirma_venda = True, True
-            if "MBT" not in self.ticker: # MBT não segue o DXY rigidamente
+            if "MBT" not in self.ticker: 
                 dxy = self.dfs.get('DXY')
                 if dxy is not None and not dxy.empty and len(dxy) >= 3:
                     dxy_direcao = dxy['Close'].iloc[-1] - dxy['Close'].iloc[-3]
@@ -282,7 +290,7 @@ class UltronEngineForex:
 @st.cache_data(ttl=60, show_spinner=False)
 def fetch_redundante(ticker, p, i):
     tickers_tentativas = [ticker]
-    if "MBT" in ticker: tickers_tentativas.extend(["BTC-USD"]) 
+    if "MBT" in ticker: tickers_tentativas.extend(["BTC=F", "BTC-USD"]) 
     if "MICD" in ticker: tickers_tentativas.extend(["MCD=F", "CAD=X"])
     if "M6E" in ticker: tickers_tentativas.extend(["EURUSD=X"])
     if "M6B" in ticker: tickers_tentativas.extend(["GBPUSD=X"])
@@ -310,6 +318,7 @@ col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
     if st.button("🧹 Limpar Todos os Diários", use_container_width=True):
         st.session_state.tracker = []
+        st.session_state.historico_ids = set() # CORREÇÃO: Limpa a memória do robô também
         st.rerun()
 
 @st.fragment(run_every="20s")
@@ -333,16 +342,18 @@ def renderizar_painel_operacional():
                 if dfs['M5'] is not None and dfs['H1'] is not None:
                     engine = UltronEngineForex(dfs, calcular_atr(dfs['M5']) * 1.5, ticker)
                     
+                    casas = 2 if "MBT" in ticker else 5
+                    
                     c1, c2, c3, c4 = st.columns(4)
                     p_live = float(dfs['M5']['Close'].iloc[-1])
-                    c1.metric(f"Ativo", f"{p_live:.5f}")
+                    c1.metric(f"Ativo", f"{p_live:.{casas}f}")
                     c2.metric("Market Phase", engine.identificar_fase_mercado().split(' ')[0])
                     
                     poc = engine.calcular_poc_institucional()
-                    c3.metric("POC Institucional", f"{poc:.5f}" if poc > 0 else "Processando...")
+                    c3.metric("POC Institucional", f"{poc:.{casas}f}" if poc > 0 else "Processando...")
                     
                     ob_bull, ob_bear = engine.calcular_order_blocks()
-                    c4.metric("Order Blocks (OB)", f"S: {ob_bull:.5f} | R: {ob_bear:.5f}")
+                    c4.metric("Order Blocks (OB)", f"S: {ob_bull:.{casas}f} | R: {ob_bear:.{casas}f}")
                     
                     operacoes_ativas = [t for t in st.session_state.tracker if t['status'] == "ATIVO 🟡" and t['ativo'] == NOMES_EXIBICAO.get(ticker, ticker)]
                     an = {'status': f"🔒 Gatilho Bloqueado: Posição Ativa neste ativo."} if operacoes_ativas else engine.escanear_mercado_hft()
@@ -365,7 +376,7 @@ def renderizar_painel_operacional():
                                     
                                     if "COMPRA" in t['tipo']:
                                         novo_sl = h - atr_trailing
-                                        if novo_sl > t['sl']: t['sl'] = round(novo_sl, 5) 
+                                        if novo_sl > t['sl']: t['sl'] = round(novo_sl, casas) 
                                         if l <= t['sl'] and t['status'] == "ATIVO 🟡": 
                                             t['status'] = "STOP TRAILING 🛡️" if t['sl'] > t['ent'] else "LOSS TÉCNICO 🔴"
                                             break
@@ -373,7 +384,7 @@ def renderizar_painel_operacional():
                                         elif h >= t['tp1'] and t['status'] == "ATIVO 🟡": t['status'] = "WIN TP1 🟢"
                                     else: 
                                         novo_sl = l + atr_trailing
-                                        if novo_sl < t['sl']: t['sl'] = round(novo_sl, 5) 
+                                        if novo_sl < t['sl']: t['sl'] = round(novo_sl, casas) 
                                         if h >= t['sl'] and t['status'] == "ATIVO 🟡": 
                                             t['status'] = "STOP TRAILING 🛡️" if t['sl'] < t['ent'] else "LOSS TÉCNICO 🔴"
                                             break
