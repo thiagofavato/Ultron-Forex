@@ -98,12 +98,9 @@ class UltronEngineForex:
             multiplicador_sl = 2.0
             lotes = 1
         
-        # O Stop Técnico define a distância em pontos decimais
         stop_pontos = atr_atual * multiplicador_sl
         
-        # CÁLCULO DINÂMICO DE RISCO (Sem tetos financeiros engessados)
-        # Transforma o stop decimal em pips (fator 10.000 para a maioria dos pares)
-        # e multiplica pelo valor médio estimado por pip de um micro contrato ($1.25)
+        # CÁLCULO DINÂMICO DE RISCO PURAMENTE MATEMÁTICO
         pips_de_stop = stop_pontos * 10000 
         risco_financeiro_organico = pips_de_stop * 1.25 * lotes 
         
@@ -307,7 +304,7 @@ def fetch_redundante(ticker, p, i):
     return None
 
 # ==========================================
-# INTERFACE MULTI-ATIVOS (TABS)
+# INTERFACE MULTI-ATIVOS (TABS E DIÁRIO MESTRE)
 # ==========================================
 st.markdown("<h2 style='text-align: center; color: black;'>🌍 ULTRON FOREX SQUAD</h2>", unsafe_allow_html=True)
 
@@ -320,6 +317,9 @@ with col2:
 @st.fragment(run_every="20s")
 def renderizar_painel_operacional():
     df_dxy = fetch_redundante("DX=F", "2d", "5m") 
+    
+    # 1. ESPAÇO RESERVADO PARA O DIÁRIO MESTRE NO TOPO DA TELA
+    container_mestre = st.container()
     
     nomes_abas = [NOMES_EXIBICAO.get(t, t) for t in TICKERS_ALVOS]
     tabs = st.tabs(nomes_abas)
@@ -388,5 +388,20 @@ def renderizar_painel_operacional():
                     else: st.caption(f"Aguardando alinhamento do {NOMES_EXIBICAO.get(ticker, ticker)}...")
                 else: st.error("❌ Falha na conexão de dados.")
             except Exception as e: st.error(f"💣 ERRO: {str(e)}")
+
+    # 2. INJEÇÃO DA TABELA MESTRE APÓS OS CÁLCULOS
+    with container_mestre:
+        if st.session_state.tracker:
+            st.markdown("<h4 style='color: #003366;'>🦅 DIÁRIO DE BATALHA MESTRE</h4>", unsafe_allow_html=True)
+            tabela_mestre = pd.DataFrame(st.session_state.tracker).drop(columns=['id', 'entry_time'], errors='ignore')
+            
+            # Reposicionando a coluna "ativo" para ser a primeira da tabela
+            cols = tabela_mestre.columns.tolist()
+            if 'ativo' in cols:
+                cols.insert(0, cols.pop(cols.index('ativo')))
+                tabela_mestre = tabela_mestre[cols]
+
+            st.dataframe(tabela_mestre.iloc[::-1], use_container_width=True, hide_index=True)
+            st.divider()
 
 renderizar_painel_operacional()
