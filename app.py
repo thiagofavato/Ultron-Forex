@@ -440,13 +440,13 @@ def renderizar_painel_operacional():
             except Exception as e: st.error(f"💣 ERRO: {str(e)}")
 
     with container_mestre:
+        st.markdown("<h4 style='color: #003366;'>🦅 DIÁRIO DE BATALHA MESTRE & HUD DE RISCO</h4>", unsafe_allow_html=True)
+        
         if st.session_state.tracker:
-            st.markdown("<h4 style='color: #003366;'>🦅 DIÁRIO DE BATALHA MESTRE & HUD DE RISCO</h4>", unsafe_allow_html=True)
-            
-            # Cálculo de Exposição Dinâmica
             tracker_ativos = [t for t in st.session_state.tracker if t['status'] == "ATIVO 🟡"]
+            risco_total = 0.0
+            
             if tracker_ativos:
-                risco_total = 0.0
                 for t in tracker_ativos:
                     ticker_original = next((k for k, v in NOMES_EXIBICAO.items() if v == t['ativo']), "M6E=F")
                     specs = ESPECIFICACOES_CME.get(ticker_original, ESPECIFICACOES_CME["M6E=F"])
@@ -459,8 +459,14 @@ def renderizar_painel_operacional():
                 c1.metric("Frentes Ativas", len(tracker_ativos))
                 c2.metric("Risco Global (Stop-Loss)", f"${risco_total:.2f}")
                 c3.metric("Status do Pelotão", "Em Combate ⚔️")
-                st.divider()
-
+            else:
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Frentes Ativas", 0)
+                c2.metric("Risco Global (Stop-Loss)", "$0.00")
+                c3.metric("Status do Pelotão", "Aguardando Alvos 📡")
+            
+            st.divider()
+            
             tabela_mestre = pd.DataFrame(st.session_state.tracker).drop(columns=['id', 'entry_time'], errors='ignore')
             cols = tabela_mestre.columns.tolist()
             if 'ativo' in cols:
@@ -468,6 +474,13 @@ def renderizar_painel_operacional():
                 tabela_mestre = tabela_mestre[cols]
 
             st.dataframe(tabela_mestre.iloc[::-1], use_container_width=True, hide_index=True)
+            st.divider()
+        else:
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Frentes Ativas", 0)
+            c2.metric("Risco Global (Stop-Loss)", "$0.00")
+            c3.metric("Status do Pelotão", "Radar Varrendo 📡")
+            st.info("Nenhuma operação registrada no diário. A máquina está patrulhando as trincheiras...")
             st.divider()
 
 renderizar_painel_operacional()
