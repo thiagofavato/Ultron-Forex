@@ -126,17 +126,14 @@ class UltronEngineForex:
     def verificar_escudo_macro(self, tempo_vela_atual):
         t_ny = tempo_vela_atual.time()
         
-        # 1. Trava Absoluta da CME (Pausa Diária de Manutenção) - Imutável
         if datetime.time(16, 50) <= t_ny <= datetime.time(18, 5):
             return "🛡️ Bloqueio Macro: Manutenção Diária CME (17:00 NY)"
 
-        # 2. Avaliação Dinâmica via API Finnhub
         if isinstance(self.calendario_macro, list):
             for evento in self.calendario_macro:
                 moeda_evento = evento["moeda"]
                 hora_evento = evento["hora"]
                 
-                # Regra de Contágio: USD afeta tudo. Euro afeta o M6E. GBP afeta o M6B, etc.
                 if moeda_evento in ["US", self.specs["moeda_base"]]:
                     janela_inicio = hora_evento - datetime.timedelta(minutes=30)
                     janela_fim = hora_evento + datetime.timedelta(minutes=15)
@@ -145,7 +142,6 @@ class UltronEngineForex:
                         nome_evento = evento["evento"]
                         return f"🛡️ Bloqueio Macro: {nome_evento} ({moeda_evento}) em andamento."
         
-        # 3. Fallback (Se a API falhar ou não houver chave configurada)
         elif self.calendario_macro == "FALHA_API":
             if datetime.time(8, 15) <= t_ny <= datetime.time(8, 45):
                 return "🛡️ Bloqueio Backup: Janela de Dados (08:30 NY)"
@@ -169,10 +165,8 @@ class UltronEngineForex:
             lotes = 1
         
         stop_pontos = atr_atual * multiplicador_sl
-        
         pips_de_stop = stop_pontos * self.specs["mult_pip"]
         risco_financeiro_organico = pips_de_stop * self.specs["valor_ponto"] * lotes 
-        
         casas = self.specs["casas"]
         
         if tipo_ordem == "COMPRA":
@@ -196,13 +190,11 @@ class UltronEngineForex:
         omega = np.var(retornos) * 0.05
         alpha = 0.15
         beta = 0.80
-        
         sigma2 = np.var(retornos)
         for r in retornos[-50:]: sigma2 = omega + alpha * (r**2) + beta * sigma2
         
         vol_projetada = np.sqrt(sigma2)
         mu = np.mean(retornos)
-        
         S0 = precos.iloc[-1]
         dt = 1 
         Z = np.random.standard_normal((periodos_frente, simulacoes))
@@ -214,8 +206,6 @@ class UltronEngineForex:
             
         preco_final = caminhos[-1]
         probabilidade = np.sum(preco_final > S0) / simulacoes if direcao == "COMPRA" else np.sum(preco_final < S0) / simulacoes
-        
-        del caminhos, Z 
         return probabilidade
 
     def calcular_poc_institucional(self):
@@ -223,7 +213,6 @@ class UltronEngineForex:
         if m5 is None or len(m5) < 200: return 0.0
         df_recente = m5.tail(200).copy()
         if df_recente['Volume'].sum() == 0: return float(df_recente['Close'].iloc[-1])
-            
         precos_tipicos = (df_recente['High'] + df_recente['Low'] + df_recente['Close']) / 3
         volumes = df_recente['Volume']
         bins = np.linspace(precos_tipicos.min(), precos_tipicos.max(), 51)
@@ -235,13 +224,11 @@ class UltronEngineForex:
         if m5 is None or len(m5) < 30: return 0.0, 0.0
         df = m5.tail(30)
         ob_bullish, ob_bearish = 0.0, 0.0
-        
         for i in range(len(df)-2, 1, -1):
             if df['Close'].iloc[i] > df['Open'].iloc[i] and (df['High'].iloc[i] - df['Low'].iloc[i]) > self.atr:
                 for j in range(i-1, max(0, i-5), -1):
                     if df['Close'].iloc[j] < df['Open'].iloc[j]: ob_bullish = df['Low'].iloc[j]; break
                 if ob_bullish > 0: break
-
         for i in range(len(df)-2, 1, -1):
             if df['Close'].iloc[i] < df['Open'].iloc[i] and (df['High'].iloc[i] - df['Low'].iloc[i]) > self.atr:
                 for j in range(i-1, max(0, i-5), -1):
@@ -269,10 +256,8 @@ class UltronEngineForex:
         m5 = self.dfs.get('M5')
         if m5 is None or len(m5) < 4: return None
         v1, v2, v3 = m5.iloc[-4], m5.iloc[-3], m5.iloc[-2]
-        
         range_v2 = v2['High'] - v2['Low']
         body_v2 = abs(v2['Open'] - v2['Close'])
-        
         if v3['Low'] > v1['High'] and range_v2 > 0 and (body_v2 / range_v2) > 0.5: return "FVG_ALTA"
         if v3['High'] < v1['Low'] and range_v2 > 0 and (body_v2 / range_v2) > 0.5: return "FVG_BAIXA"
         return None
@@ -280,45 +265,33 @@ class UltronEngineForex:
     def escanear_mercado_hft(self):
         m5 = self.dfs.get('M5')
         if m5 is None or m5.empty: return {"status": "Aguardando Dados"}
-        
         fase_atual = self.identificar_fase_mercado()
         
         try:
             tempo_vela_atual = m5.index[-1].replace(tzinfo=pytz.timezone('America/New_York'))
-            
-            # Análise do Escudo Macro
             status_escudo = self.verificar_escudo_macro(tempo_vela_atual)
             if status_escudo != "LIVRE":
                 return {"status": status_escudo}
 
             p_live = float(m5['Close'].iloc[-1])
             vela_atual_m5, ultima_vela_fechada = m5.iloc[-1], m5.iloc[-2]
-            
             tipo_rejeicao, extremo_pavio = self.validar_rejeicao_vshape(ultima_vela_fechada)
             range_vela = vela_atual_m5['High'] - vela_atual_m5['Low']
             body_percent = abs(vela_atual_m5['Open'] - vela_atual_m5['Close']) / range_vela if range_vela > 0 else 0
             
             breakout_compra = p_live > float(m5.tail(8)['High'].max()) and body_percent > 0.6
             breakout_venda = p_live < float(m5.tail(8)['Low'].min()) and body_percent > 0.6
-            
             caixote_high, caixote_low = float(m5.tail(16).iloc[:-1]['High'].max()), float(m5.tail(16).iloc[:-1]['Low'].min())
             sweep_compra = (vela_atual_m5['Low'] < caixote_low) and (p_live > caixote_low) and (vela_atual_m5['Close'] > vela_atual_m5['Open'])
             sweep_venda = (vela_atual_m5['High'] > caixote_high) and (p_live < caixote_high) and (vela_atual_m5['Close'] < vela_atual_m5['Open'])
-            
             mss_compra = p_live > float(m5.tail(12).iloc[:-2]['High'].max())
             mss_venda = p_live < float(m5.tail(12).iloc[:-2]['Low'].min())
 
-            if "Accumulation" in fase_atual or "Distribution" in fase_atual:
-                breakout_compra, breakout_venda = False, False
-            elif "Uptrend" in fase_atual:
-                sweep_venda, breakout_venda = False, False
-                if tipo_rejeicao == "BAIXA": tipo_rejeicao = None
-            elif "Downtrend" in fase_atual:
-                sweep_compra, breakout_compra = False, False
-                if tipo_rejeicao == "ALTA": tipo_rejeicao = None
+            if "Accumulation" in fase_atual or "Distribution" in fase_atual: breakout_compra, breakout_venda = False, False
+            elif "Uptrend" in fase_atual: sweep_venda, breakout_venda = False, False; tipo_rejeicao = None if tipo_rejeicao == "BAIXA" else tipo_rejeicao
+            elif "Downtrend" in fase_atual: sweep_compra, breakout_compra = False, False; tipo_rejeicao = None if tipo_rejeicao == "ALTA" else tipo_rejeicao
 
             fvg_atual = self.detectar_fvg()
-
             confirma_compra, confirma_venda = True, True
             if "MBT" not in self.ticker: 
                 dxy = self.dfs.get('DXY')
@@ -468,9 +441,27 @@ def renderizar_painel_operacional():
 
     with container_mestre:
         if st.session_state.tracker:
-            st.markdown("<h4 style='color: #003366;'>🦅 DIÁRIO DE BATALHA MESTRE</h4>", unsafe_allow_html=True)
-            tabela_mestre = pd.DataFrame(st.session_state.tracker).drop(columns=['id', 'entry_time'], errors='ignore')
+            st.markdown("<h4 style='color: #003366;'>🦅 DIÁRIO DE BATALHA MESTRE & HUD DE RISCO</h4>", unsafe_allow_html=True)
             
+            # Cálculo de Exposição Dinâmica
+            tracker_ativos = [t for t in st.session_state.tracker if t['status'] == "ATIVO 🟡"]
+            if tracker_ativos:
+                risco_total = 0.0
+                for t in tracker_ativos:
+                    ticker_original = next((k for k, v in NOMES_EXIBICAO.items() if v == t['ativo']), "M6E=F")
+                    specs = ESPECIFICACOES_CME.get(ticker_original, ESPECIFICACOES_CME["M6E=F"])
+                    distancia_pontos = abs(t['ent'] - t['sl'])
+                    pips = distancia_pontos * specs["mult_pip"]
+                    risco_usd = pips * specs["valor_ponto"] * 1 # Lote cravado em 1
+                    risco_total += risco_usd
+                
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Frentes Ativas", len(tracker_ativos))
+                c2.metric("Risco Global (Stop-Loss)", f"${risco_total:.2f}")
+                c3.metric("Status do Pelotão", "Em Combate ⚔️")
+                st.divider()
+
+            tabela_mestre = pd.DataFrame(st.session_state.tracker).drop(columns=['id', 'entry_time'], errors='ignore')
             cols = tabela_mestre.columns.tolist()
             if 'ativo' in cols:
                 cols.insert(0, cols.pop(cols.index('ativo')))
