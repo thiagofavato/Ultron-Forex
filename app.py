@@ -17,13 +17,22 @@ st.set_page_config(page_title="ULTRON FOREX SQUAD", layout="wide", initial_sideb
 st.markdown("<style>[data-testid='stMetricValue']{font-size: 1.4rem !important;}[data-testid='stMetricLabel']{font-size: 0.9rem !important;}</style>", unsafe_allow_html=True)
 
 # ==========================================
-# ARSENAL DE ATIVOS COMEX/CME
+# ARSENAL E ESPECIFICAÇÕES OFICIAIS CME (DOSSIÊ)
 # ==========================================
 TICKERS_ALVOS = ["M6E=F", "M6B=F", "M6A=F", "MICD=F", "MBT=F"] 
 NOMES_EXIBICAO = {
     "M6E=F": "Micro EUR/USD", "M6B=F": "Micro GBP/USD", 
     "M6A=F": "Micro AUD/USD", "MICD=F": "Micro CAD/USD", 
     "MBT=F": "Micro Bitcoin"
+}
+
+# Tabela de Consulta (Lookup Table) Institucional
+ESPECIFICACOES_CME = {
+    "M6E=F": {"valor_ponto": 1.25, "casas": 5, "mult_pip": 10000},
+    "M6B=F": {"valor_ponto": 0.625, "casas": 5, "mult_pip": 10000},
+    "M6A=F": {"valor_ponto": 1.00, "casas": 5, "mult_pip": 10000},
+    "MICD=F": {"valor_ponto": 1.00, "casas": 5, "mult_pip": 10000},
+    "MBT=F": {"valor_ponto": 0.10, "casas": 2, "mult_pip": 1} # 1 Ponto = $0.10 (Tick de 5 pontos = $0.50)
 }
 
 if "tracker" not in st.session_state:
@@ -57,7 +66,7 @@ def registrar_no_tracker(d, id_unico, ticker):
         })
         
         seta = "🚀" if "COMPRA" in d['tipo'] else "🧨"
-        casas = 2 if "MBT" in ticker else 5
+        casas = ESPECIFICACOES_CME.get(ticker, {"casas": 5})["casas"]
         msg = f"{seta} <b>ULTRON FOREX | {NOMES_EXIBICAO.get(ticker, ticker)} | {d['tipo']}</b>\n"
         msg += f"🎯 Entry: {d['entrada']:.{casas}f}\n"
         msg += f"🛡️ Stop: {d['sl']:.{casas}f}\n\n"
@@ -84,6 +93,7 @@ class UltronEngineForex:
         self.dfs = dfs
         self.atr = atr
         self.ticker = ticker
+        self.specs = ESPECIFICACOES_CME.get(ticker, {"valor_ponto": 1.0, "casas": 5, "mult_pip": 10000})
 
     def calcular_risco_dinamico(self, preco_entrada, atr_atual, tipo_ordem):
         if atr_atual < (preco_entrada * 0.0005): 
@@ -101,15 +111,11 @@ class UltronEngineForex:
         
         stop_pontos = atr_atual * multiplicador_sl
         
-        # CORREÇÃO MATEMÁTICA BTC VS FOREX
-        multiplicador_pip = 1 if "MBT" in self.ticker else 10000
-        pips_de_stop = stop_pontos * multiplicador_pip 
+        # CÁLCULO CIRÚRGICO INSTITUCIONAL (Via Lookup Table)
+        pips_de_stop = stop_pontos * self.specs["mult_pip"]
+        risco_financeiro_organico = pips_de_stop * self.specs["valor_ponto"] * lotes 
         
-        # O Micro Bitcoin Futuro (MBT) paga $0.10 por ponto de movimento. Forex Micro paga ~$1.00-$1.25.
-        valor_tick = 0.10 if "MBT" in self.ticker else 1.25
-        risco_financeiro_organico = pips_de_stop * valor_tick * lotes 
-        
-        casas = 2 if "MBT" in self.ticker else 5
+        casas = self.specs["casas"]
         
         if tipo_ordem == "COMPRA":
             sl_price = preco_entrada - stop_pontos
@@ -318,7 +324,7 @@ col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
     if st.button("🧹 Limpar Todos os Diários", use_container_width=True):
         st.session_state.tracker = []
-        st.session_state.historico_ids = set() # CORREÇÃO: Limpa a memória do robô também
+        st.session_state.historico_ids = set() 
         st.rerun()
 
 @st.fragment(run_every="20s")
@@ -341,8 +347,7 @@ def renderizar_painel_operacional():
                 
                 if dfs['M5'] is not None and dfs['H1'] is not None:
                     engine = UltronEngineForex(dfs, calcular_atr(dfs['M5']) * 1.5, ticker)
-                    
-                    casas = 2 if "MBT" in ticker else 5
+                    casas = engine.specs["casas"]
                     
                     c1, c2, c3, c4 = st.columns(4)
                     p_live = float(dfs['M5']['Close'].iloc[-1])
