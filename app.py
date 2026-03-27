@@ -27,11 +27,11 @@ NOMES_EXIBICAO = {
 }
 
 ESPECIFICACOES_CME = {
-    "M6E=F": {"valor_ponto": 1.25, "casas": 5, "mult_pip": 10000},
-    "M6B=F": {"valor_ponto": 0.625, "casas": 5, "mult_pip": 10000},
-    "M6A=F": {"valor_ponto": 1.00, "casas": 5, "mult_pip": 10000},
-    "MICD=F": {"valor_ponto": 1.00, "casas": 5, "mult_pip": 10000},
-    "MBT=F": {"valor_ponto": 0.10, "casas": 2, "mult_pip": 1} 
+    "M6E=F": {"valor_ponto": 1.25, "casas": 5, "mult_pip": 10000, "moeda_base": "EUR"},
+    "M6B=F": {"valor_ponto": 0.625, "casas": 5, "mult_pip": 10000, "moeda_base": "GBP"},
+    "M6A=F": {"valor_ponto": 1.00, "casas": 5, "mult_pip": 10000, "moeda_base": "AUD"},
+    "MICD=F": {"valor_ponto": 1.00, "casas": 5, "mult_pip": 10000, "moeda_base": "CAD"},
+    "MBT=F": {"valor_ponto": 0.10, "casas": 2, "mult_pip": 1, "moeda_base": "BTC"} 
 }
 
 if "tracker" not in st.session_state:
@@ -85,6 +85,34 @@ def calcular_atr(df, period=14):
     return atr if not np.isnan(atr) else (100.0 if df['Close'].iloc[-1] > 1000 else 0.0020)
 
 # ==========================================
+# ESCUDO MACROECONÔMICO DINÂMICO (API)
+# ==========================================
+@st.cache_data(ttl=3600, show_spinner=False)
+def mapear_noticias_alto_impacto():
+    hoje = datetime.datetime.now(pytz.timezone('America/New_York')).strftime('%Y-%m-%d')
+    eventos_perigosos = []
+    
+    try:
+        if "FINNHUB_TOKEN" in st.secrets:
+            token = st.secrets["FINNHUB_TOKEN"]
+            url = f"https://finnhub.io/api/v1/economic?from={hoje}&to={hoje}&token={token}"
+            resposta = requests.get(url, timeout=5)
+            if resposta.status_code == 200:
+                dados = resposta.json()
+                for evento in dados:
+                    if evento.get('impact') == 'high' or evento.get('impact') == 3:
+                        hora_evento = datetime.datetime.strptime(evento['time'], '%Y-%m-%d %H:%M:%S').replace(tzinfo=pytz.utc)
+                        hora_ny = hora_evento.astimezone(pytz.timezone('America/New_York'))
+                        eventos_perigosos.append({
+                            "moeda": evento.get('country'),
+                            "hora": hora_ny,
+                            "evento": evento.get('event')
+                        })
+                return eventos_perigosos
+    except: pass
+    return "FALHA_API"
+
+# ==========================================
 # ULTRON ENGINE MULTI-ATIVOS
 # ==========================================
 class UltronEngineForex:
@@ -92,7 +120,39 @@ class UltronEngineForex:
         self.dfs = dfs
         self.atr = atr
         self.ticker = ticker
-        self.specs = ESPECIFICACOES_CME.get(ticker, {"valor_ponto": 1.0, "casas": 5, "mult_pip": 10000})
+        self.specs = ESPECIFICACOES_CME.get(ticker, {"valor_ponto": 1.0, "casas": 5, "mult_pip": 10000, "moeda_base": "USD"})
+        self.calendario_macro = mapear_noticias_alto_impacto()
+
+    def verificar_escudo_macro(self, tempo_vela_atual):
+        t_ny = tempo_vela_atual.time()
+        
+        # 1. Trava Absoluta da CME (Pausa Diária de Manutenção) - Imutável
+        if datetime.time(16, 50) <= t_ny <= datetime.time(18, 5):
+            return "🛡️ Bloqueio Macro: Manutenção Diária CME (17:00 NY)"
+
+        # 2. Avaliação Dinâmica via API Finnhub
+        if isinstance(self.calendario_macro, list):
+            for evento in self.calendario_macro:
+                moeda_evento = evento["moeda"]
+                hora_evento = evento["hora"]
+                
+                # Regra de Contágio: USD afeta tudo. Euro afeta o M6E. GBP afeta o M6B, etc.
+                if moeda_evento in ["US", self.specs["moeda_base"]]:
+                    janela_inicio = hora_evento - datetime.timedelta(minutes=30)
+                    janela_fim = hora_evento + datetime.timedelta(minutes=15)
+                    
+                    if janela_inicio <= tempo_vela_atual <= janela_fim:
+                        nome_evento = evento["evento"]
+                        return f"🛡️ Bloqueio Macro: {nome_evento} ({moeda_evento}) em andamento."
+        
+        # 3. Fallback (Se a API falhar ou não houver chave configurada)
+        elif self.calendario_macro == "FALHA_API":
+            if datetime.time(8, 15) <= t_ny <= datetime.time(8, 45):
+                return "🛡️ Bloqueio Backup: Janela de Dados (08:30 NY)"
+            if datetime.time(13, 45) <= t_ny <= datetime.time(14, 30):
+                return "🛡️ Bloqueio Backup: Janela FED/Bancos Centrais"
+
+        return "LIVRE"
 
     def calcular_risco_dinamico(self, preco_entrada, atr_atual, tipo_ordem):
         if atr_atual < (preco_entrada * 0.0005): 
@@ -224,18 +284,14 @@ class UltronEngineForex:
         fase_atual = self.identificar_fase_mercado()
         
         try:
-            p_live = float(m5['Close'].iloc[-1])
-            tempo_vela_atual = m5.index[-1]
-            t_ny = tempo_vela_atual.time()
+            tempo_vela_atual = m5.index[-1].replace(tzinfo=pytz.timezone('America/New_York'))
             
-            # ESCUDO MACROECONÔMICO (Horários de Nova York / EST)
-            if datetime.time(8, 15) <= t_ny <= datetime.time(8, 45):
-                return {"status": "🛡️ Bloqueio Macro: Janela de Dados (08:30 NY)"}
-            if datetime.time(13, 45) <= t_ny <= datetime.time(14, 30):
-                return {"status": "🛡️ Bloqueio Macro: Janela FED/Bancos Centrais"}
-            if datetime.time(16, 50) <= t_ny <= datetime.time(18, 5):
-                return {"status": "🛡️ Bloqueio Macro: Manutenção Diária CME"}
+            # Análise do Escudo Macro
+            status_escudo = self.verificar_escudo_macro(tempo_vela_atual)
+            if status_escudo != "LIVRE":
+                return {"status": status_escudo}
 
+            p_live = float(m5['Close'].iloc[-1])
             vela_atual_m5, ultima_vela_fechada = m5.iloc[-1], m5.iloc[-2]
             
             tipo_rejeicao, extremo_pavio = self.validar_rejeicao_vshape(ultima_vela_fechada)
@@ -280,7 +336,7 @@ class UltronEngineForex:
                     return {"status": "Sinal Encontrado", "dados": {
                         "tipo": "COMPRA", "fase": fase_atual, "motivo": f"{motivo} | {risco_data['regime_vol']} | Prob: {prob_sucesso:.1%} | Lotes: {risco_data['lotes']}", 
                         "entrada": p_live, "sl": risco_data['sl'], "tp1": risco_data['tp1'], "tp2": risco_data['tp2'], "tp3": risco_data['tp3'], 
-                        "tempo_vela": tempo_vela_atual, "id": f"BUY_{self.ticker}_{tempo_vela_atual.strftime('%H%M')}"}}
+                        "tempo_vela": tempo_vela_atual.replace(tzinfo=None), "id": f"BUY_{self.ticker}_{tempo_vela_atual.strftime('%H%M')}"}}
                 else: return {"status": f"Bloqueio Monte Carlo: Probabilidade Compra Baixa ({prob_sucesso:.1%})"}
             
             elif tipo_rejeicao == "BAIXA" or sweep_venda or (breakout_venda and fvg_atual == "FVG_BAIXA" and mss_venda):
@@ -292,7 +348,7 @@ class UltronEngineForex:
                     return {"status": "Sinal Encontrado", "dados": {
                         "tipo": "VENDA", "fase": fase_atual, "motivo": f"{motivo} | {risco_data['regime_vol']} | Prob: {prob_sucesso:.1%} | Lotes: {risco_data['lotes']}", 
                         "entrada": p_live, "sl": risco_data['sl'], "tp1": risco_data['tp1'], "tp2": risco_data['tp2'], "tp3": risco_data['tp3'], 
-                        "tempo_vela": tempo_vela_atual, "id": f"SELL_{self.ticker}_{tempo_vela_atual.strftime('%H%M')}"}}
+                        "tempo_vela": tempo_vela_atual.replace(tzinfo=None), "id": f"SELL_{self.ticker}_{tempo_vela_atual.strftime('%H%M')}"}}
                 else: return {"status": f"Bloqueio Monte Carlo: Probabilidade Venda Baixa ({prob_sucesso:.1%})"}
 
             return {"status": f"Vigília SMC | Fase: {fase_atual}"}
