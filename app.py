@@ -17,7 +17,7 @@ st.set_page_config(page_title="ULTRON FOREX SQUAD", layout="wide", initial_sideb
 st.markdown("<style>[data-testid='stMetricValue']{font-size: 1.4rem !important;}[data-testid='stMetricLabel']{font-size: 0.9rem !important;}</style>", unsafe_allow_html=True)
 
 # ==========================================
-# ARSENAL E ESPECIFICAÇÕES OFICIAIS CME (DOSSIÊ)
+# ARSENAL E ESPECIFICAÇÕES OFICIAIS CME
 # ==========================================
 TICKERS_ALVOS = ["M6E=F", "M6B=F", "M6A=F", "MICD=F", "MBT=F"] 
 NOMES_EXIBICAO = {
@@ -26,13 +26,12 @@ NOMES_EXIBICAO = {
     "MBT=F": "Micro Bitcoin"
 }
 
-# Tabela de Consulta (Lookup Table) Institucional
 ESPECIFICACOES_CME = {
     "M6E=F": {"valor_ponto": 1.25, "casas": 5, "mult_pip": 10000},
     "M6B=F": {"valor_ponto": 0.625, "casas": 5, "mult_pip": 10000},
     "M6A=F": {"valor_ponto": 1.00, "casas": 5, "mult_pip": 10000},
     "MICD=F": {"valor_ponto": 1.00, "casas": 5, "mult_pip": 10000},
-    "MBT=F": {"valor_ponto": 0.10, "casas": 2, "mult_pip": 1} # 1 Ponto = $0.10 (Tick de 5 pontos = $0.50)
+    "MBT=F": {"valor_ponto": 0.10, "casas": 2, "mult_pip": 1} 
 }
 
 if "tracker" not in st.session_state:
@@ -111,7 +110,6 @@ class UltronEngineForex:
         
         stop_pontos = atr_atual * multiplicador_sl
         
-        # CÁLCULO CIRÚRGICO INSTITUCIONAL (Via Lookup Table)
         pips_de_stop = stop_pontos * self.specs["mult_pip"]
         risco_financeiro_organico = pips_de_stop * self.specs["valor_ponto"] * lotes 
         
@@ -228,6 +226,16 @@ class UltronEngineForex:
         try:
             p_live = float(m5['Close'].iloc[-1])
             tempo_vela_atual = m5.index[-1]
+            t_ny = tempo_vela_atual.time()
+            
+            # ESCUDO MACROECONÔMICO (Horários de Nova York / EST)
+            if datetime.time(8, 15) <= t_ny <= datetime.time(8, 45):
+                return {"status": "🛡️ Bloqueio Macro: Janela de Dados (08:30 NY)"}
+            if datetime.time(13, 45) <= t_ny <= datetime.time(14, 30):
+                return {"status": "🛡️ Bloqueio Macro: Janela FED/Bancos Centrais"}
+            if datetime.time(16, 50) <= t_ny <= datetime.time(18, 5):
+                return {"status": "🛡️ Bloqueio Macro: Manutenção Diária CME"}
+
             vela_atual_m5, ultima_vela_fechada = m5.iloc[-1], m5.iloc[-2]
             
             tipo_rejeicao, extremo_pavio = self.validar_rejeicao_vshape(ultima_vela_fechada)
